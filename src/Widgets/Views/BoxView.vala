@@ -116,7 +116,10 @@ namespace PlayMyVideos.Widgets.Views {
         }
 
         private void current_box_removed () {
-            box_removed ();
+            Idle.add (() => {
+                box_removed ();
+                return false;
+            });
         }
 
         private void change_cover () {
@@ -149,7 +152,7 @@ namespace PlayMyVideos.Widgets.Views {
 
         private bool show_context_menu (Gtk.Widget sender, Gdk.EventButton evt) {
             if (evt.type == Gdk.EventType.BUTTON_PRESS && evt.button == 3) {
-                menu.popup (null, null, null, evt.button, evt.time);
+                menu.popup_at_pointer (null);
                 return true;
             }
             return false;

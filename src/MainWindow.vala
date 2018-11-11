@@ -49,15 +49,9 @@ namespace PlayMyVideos {
 
         construct {
             settings = Settings.get_default ();
-            settings.notify["use-dark-theme"].connect (
-                () => {
-                    Gtk.Settings.get_default ().gtk_application_prefer_dark_theme = settings.use_dark_theme;
-                    if (settings.use_dark_theme) {
-                        app_menu.set_image (new Gtk.Image.from_icon_name ("open-menu-symbolic", Gtk.IconSize.LARGE_TOOLBAR));
-                    } else {
-                        app_menu.set_image (new Gtk.Image.from_icon_name ("open-menu", Gtk.IconSize.LARGE_TOOLBAR));
-                    }
-                });
+            settings.notify["use-dark-theme"].connect (() => {
+                Gtk.Settings.get_default ().gtk_application_prefer_dark_theme = settings.use_dark_theme;
+            });
 
             library_manager = PlayMyVideos.Services.LibraryManager.instance;
             library_manager.added_new_box.connect (
@@ -127,69 +121,55 @@ namespace PlayMyVideos {
             load_settings ();
             build_ui ();
 
-            load_content_from_database.begin (
-                (obj, res) => {
-                    library_manager.sync_library_content.begin ();
-                    visible_playing_button ();
-                });
-
-            this.configure_event.connect (
-                (event) => {
-                    if (!player_view.playback.playing) {
-                        settings.window_width = event.width;
-                        settings.window_height = event.height;
-                    }
-                    return false;
-                });
-            this.motion_notify_event.connect (
-                (event) => {
-                    show_mouse_cursor ();
-                    return false;
-                });
-            this.window_state_event.connect (
-                (event) => {
-                    current_state = event.new_window_state;
-                    return false;
-                });
-            this.delete_event.connect (
-                () => {
-                    save_settings ();
-                    player_view.reset ();
-                    return false;
-                });
-            this.key_press_event.connect (
-                (key) => {
-                    if (content.visible_child_name == "player") {
-                        switch (key.keyval) {
-                        case Gdk.Key.Left :
-                            if (Gdk.ModifierType.MOD1_MASK in key.state) {
-                                break;
-                            }
-                            if (Gdk.ModifierType.SHIFT_MASK in key.state) {
-                                seek_seconds (-300);
-                            } else {
-                                seek_seconds (-10);
-                            }
-                            return true;
-                        case Gdk.Key.Right :
-                            if (Gdk.ModifierType.MOD1_MASK in key.state) {
-                                break;
-                            }
-                            if (Gdk.ModifierType.SHIFT_MASK in key.state) {
-                                seek_seconds (300);
-                            } else {
-                                seek_seconds (10);
-                            }
-                            return true;
-                        case Gdk.Key.space :
-                            toggle_playing ();
-                            return true;
+            load_content_from_database.begin ((obj, res) => {
+                library_manager.sync_library_content.begin ();
+                visible_playing_button ();
+            });
+            this.motion_notify_event.connect ((event) => {
+                show_mouse_cursor ();
+                return false;
+            });
+            this.window_state_event.connect ((event) => {
+                current_state = event.new_window_state;
+                return false;
+            });
+            this.delete_event.connect (() => {
+                save_settings ();
+                player_view.reset ();
+                return false;
+            });
+            this.key_press_event.connect ((key) => {
+                if (content.visible_child_name == "player") {
+                    switch (key.keyval) {
+                    case Gdk.Key.Left :
+                        if (Gdk.ModifierType.MOD1_MASK in key.state) {
+                            break;
                         }
-                    } else if (!search_entry.is_focus && key.str.strip ().length > 0) {
-                        search_entry.grab_focus ();
+                        if (Gdk.ModifierType.SHIFT_MASK in key.state) {
+                            seek_seconds (-300);
+                        } else {
+                            seek_seconds (-10);
+                        }
+                        return true;
+                    case Gdk.Key.Right :
+                        if (Gdk.ModifierType.MOD1_MASK in key.state) {
+                            break;
+                        }
+                        if (Gdk.ModifierType.SHIFT_MASK in key.state) {
+                            seek_seconds (300);
+                        } else {
+                            seek_seconds (10);
+                        }
+                        return true;
+                    case Gdk.Key.space :
+                        toggle_playing ();
+                        return true;
                     }
-                    return false;
-                });
+                } else if (!search_entry.is_focus && key.str.strip ().length > 0) {
+                    search_entry.grab_focus ();
+                }
+                return false;
+            });
         }
 
         private void build_ui () {
@@ -198,61 +178,130 @@ namespace PlayMyVideos {
 
             headerbar = new Gtk.HeaderBar ();
             headerbar.show_close_button = true;
-            headerbar.get_style_context ().add_class ("default-decoration");
             headerbar.title = _ ("Cinema");
 
+            header_build_play_button ();
+
+            header_build_app_menu ();
+
+            header_build_style_switcher ();
+
+            header_build_search_entry ();
+
+            // SPINNER
+            spinner = new Gtk.Spinner ();
+            headerbar.pack_end (spinner);
+
+            header_build_back_button ();
+
+            this.set_titlebar (headerbar);
+
+            boxes_view = new Widgets.Views.BoxesView ();
+            boxes_view.video_selected.connect (show_player);
+            boxes_view.box_removed.connect ((current_count) => {
+                if (current_count == 0) {
+                    Idle.add (() => {
+                        if (content.visible_child_name != "welcome") {
+                            content.visible_child_name = "welcome";
+                        }
+                        return false;
+                    });
+                }
+            });
+
+            player_view = new Widgets.Views.PlayerView ();
+            player_view.ended.connect (() => {
+                settings.last_played_video_uri = "";
+                settings.last_played_video_progress = 0;
+                show_boxes ();
+            });
+            player_view.started.connect ((video) => {
+                headerbar.title = video.title;
+                play_button.visible = false;
+            });
+            player_view.player_frame_resized.connect ((width, height) => {
+                if (width < 0 || height < 0) {
+                    return;
+                }
+                var current_width = this.get_allocated_width ();
+                double w_r = (double)(current_width - 156) / width;
+                int new_height = (int)(height * w_r) + 193;
+                if (current_width <= 0 || new_height <=0) {
+                    return;
+                }
+                this.get_window ().resize (current_width, new_height);
+            });
+
+            var welcome = new Widgets.Views.Welcome ();
+
+            content.add_named (welcome, "welcome");
+            content.add_named (boxes_view, "boxes");
+            content.add_named (player_view, "player");
+            this.add (content);
+            this.show_all ();
+            navigation_button.hide ();
+        }
+
+        private void header_build_play_button () {
             play_button = new Gtk.Button.from_icon_name ("media-playback-start-symbolic", Gtk.IconSize.LARGE_TOOLBAR);
             play_button.valign = Gtk.Align.CENTER;
             play_button.tooltip_text = _ ("Resume playing");
-            play_button.clicked.connect (
-                () => {
-                    toggle_playing ();
-                });
+            play_button.clicked.connect (() => {
+                toggle_playing ();
+            });
 
             headerbar.pack_start (play_button);
+        }
 
-            //SETTINGS MENU
+        private void header_build_back_button () {
+            navigation_button = new Gtk.Button ();
+            navigation_button.label = _ ("Back");
+            navigation_button.valign = Gtk.Align.CENTER;
+            navigation_button.can_focus = false;
+            navigation_button.get_style_context ().add_class ("back-button");
+            navigation_button.clicked.connect (() => {
+                settings.last_played_video_progress = player_view.playback.progress;
+                show_boxes ();
+                player_view.clear_last_size ();
+            });
+
+            headerbar.pack_start (navigation_button);
+        }
+
+        private void header_build_app_menu () {
             app_menu = new Gtk.MenuButton ();
-            if (settings.use_dark_theme) {
-                app_menu.set_image (new Gtk.Image.from_icon_name ("open-menu-symbolic", Gtk.IconSize.LARGE_TOOLBAR));
-            } else {
-                app_menu.set_image (new Gtk.Image.from_icon_name ("open-menu", Gtk.IconSize.LARGE_TOOLBAR));
-            }
+            app_menu.set_image (new Gtk.Image.from_icon_name ("open-menu-symbolic", Gtk.IconSize.LARGE_TOOLBAR));
 
             var settings_menu = new Gtk.Menu ();
 
             var menu_item_library = new Gtk.MenuItem.with_label (_ ("Change Video Folder…"));
-            menu_item_library.activate.connect (
-                () => {
-                    var folder = library_manager.choose_folder ();
-                    if (folder != null) {
-                        settings.library_location = folder;
-                        library_manager.scan_local_library_for_new_files (folder);
-                    }
-                });
+            menu_item_library.activate.connect (() => {
+                var folder = library_manager.choose_folder ();
+                if (folder != null) {
+                    settings.library_location = folder;
+                    library_manager.scan_local_library_for_new_files (folder);
+                }
+            });
 
             var menu_item_import = new Gtk.MenuItem.with_label (_ ("Import Videos…"));
-            menu_item_import.activate.connect (
-                () => {
-                    var folder = library_manager.choose_folder ();
-                    if (folder != null) {
-                        library_manager.scan_local_library_for_new_files (folder);
-                    }
-                });
+            menu_item_import.activate.connect (() => {
+                var folder = library_manager.choose_folder ();
+                if (folder != null) {
+                    library_manager.scan_local_library_for_new_files (folder);
+                }
+            });
 
             menu_item_rescan = new Gtk.MenuItem.with_label (_ ("Rescan Library"));
-            menu_item_rescan.activate.connect (
-                () => {
-                    reset_all_views ();
-                    library_manager.rescan_library ();
-                });
+            menu_item_rescan.activate.connect (() => {
+                reset_all_views ();
+                library_manager.rescan_library ();
+            });
 
             var menu_item_preferences = new Gtk.MenuItem.with_label (_ ("Preferences"));
-            menu_item_preferences.activate.connect (
-                () => {
-                    var preferences = new Dialogs.Preferences (this);
-                    preferences.run ();
-                });
+            menu_item_preferences.activate.connect (() => {
+                var preferences = new Dialogs.Preferences (this);
+                preferences.run ();
+            });
 
             settings_menu.append (menu_item_library);
             settings_menu.append (menu_item_import);
@@ -264,73 +313,26 @@ namespace PlayMyVideos {
 
             app_menu.popup = settings_menu;
             headerbar.pack_end (app_menu);
+        }
 
+        private void header_build_style_switcher () {
+            var mode_switch = new Granite.ModeSwitch.from_icon_name ("display-brightness-symbolic", "weather-clear-night-symbolic");
+            mode_switch.valign = Gtk.Align.CENTER;
+            mode_switch.active = settings.use_dark_theme;
+            mode_switch.notify["active"].connect (() => {
+                settings.use_dark_theme = mode_switch.active;
+            });
+            headerbar.pack_end (mode_switch);
+        }
+
+        private void header_build_search_entry () {
             search_entry = new Gtk.SearchEntry ();
             search_entry.placeholder_text = _ ("Search Videos");
             search_entry.valign = Gtk.Align.CENTER;
-            search_entry.search_changed.connect (
-                () => {
-                    boxes_view.filter = search_entry.text;
-                });
+            search_entry.search_changed.connect (() => {
+                boxes_view.filter = search_entry.text;
+            });
             headerbar.pack_end (search_entry);
-
-            // SPINNER
-            spinner = new Gtk.Spinner ();
-            headerbar.pack_end (spinner);
-
-            navigation_button = new Gtk.Button ();
-            navigation_button.label = _ ("Back");
-            navigation_button.valign = Gtk.Align.CENTER;
-            navigation_button.can_focus = false;
-            navigation_button.get_style_context ().add_class ("back-button");
-            navigation_button.clicked.connect (
-                () => {
-                    settings.last_played_video_progress = player_view.playback.progress;
-                    show_boxes ();
-                    player_view.clear_last_size ();
-                });
-
-            headerbar.pack_start (navigation_button);
-
-            this.set_titlebar (headerbar);
-
-            boxes_view = new Widgets.Views.BoxesView ();
-            boxes_view.video_selected.connect (show_player);
-
-            player_view = new Widgets.Views.PlayerView ();
-            player_view.ended.connect (
-                () => {
-                    settings.last_played_video_uri = "";
-                    settings.last_played_video_progress = 0;
-                    show_boxes ();
-                });
-            player_view.started.connect (
-                (video) => {
-                    headerbar.title = video.title;
-                    play_button.visible = false;
-                });
-            player_view.player_frame_resized.connect (
-                (width, height) => {
-                    if (width < 0 || height < 0) {
-                        return;
-                    }
-                    var current_width = this.get_allocated_width ();
-                    double w_r = (double)(current_width - 156) / width;
-                    int new_height = (int)(height * w_r) + 206;
-                    if (current_width <= 0 || new_height <=0) {
-                        return;
-                    }
-                    this.get_window ().resize (current_width, new_height);
-                });
-
-            var welcome = new Widgets.Views.Welcome ();
-
-            content.add_named (welcome, "welcome");
-            content.add_named (boxes_view, "boxes");
-            content.add_named (player_view, "player");
-            this.add (content);
-            this.show_all ();
-            navigation_button.hide ();
         }
 
         private void visible_playing_button () {
@@ -407,6 +409,11 @@ namespace PlayMyVideos {
                 this.get_position (out x, out y);
                 settings.window_x = x;
                 settings.window_y = y;
+
+                int width, height;
+                this.get_size (out width, out height);
+                settings.window_height = height;
+                settings.window_width = width;
             }
         }
 
@@ -484,8 +491,7 @@ namespace PlayMyVideos {
         }
 
         public void hide_mouse_cursor () {
-            var display = this.get_window ().get_display ();
-            var cursor = new Gdk.Cursor.for_display (display, Gdk.CursorType.BLANK_CURSOR);
+            var cursor = new Gdk.Cursor.from_name (Gdk.Display.get_default (), "none");
             this.get_window ().set_cursor (cursor);
         }
 
